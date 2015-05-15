@@ -10,8 +10,9 @@ This information makes automatically reading tables etc. from the PDF document r
 See top of the file for more usage information and details.
 
 
-Example Usage:
+## Example Usage:
 
+```
 from pyPDFStructure import *
 
 fin = open("somedoc.pdf", "rb")
@@ -19,3 +20,4 @@ doc = PDFDocument(fin.read())
 fin.close()
 
 tree = doc.get_structure_tree()
+```
