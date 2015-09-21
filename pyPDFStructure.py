@@ -258,8 +258,12 @@ class ContentStm(PDFObj): # a content stream, with rendering command / text
 	
 	def __init__(self, doc, str, d):
 		PDFObj.__init__(self, doc, "ContentStm")
-		startstream = str.find("stream")+8 # add 2 chars for newline after
-		endstream = str.rfind("endstream")-2 # remove 2 chars for newline before
+		startstream = str.find("stream")+6
+		endstream = str.rfind("endstream")
+		# we need to remove the newlines:
+		# if using UNIX newlines, remove 1 char, else remove 2 (Windows newlines)
+		startstream += 2 if str[startstream] == '\r' else 1
+		endstream -= 2 if str[endstream-1] == '\r' else 1
 		stmdata = str[startstream:endstream]
 		if d["Filter"]=="/FlateDecode": # if the filter is zlib/decompress
 			dec = zlib.decompress(stmdata) # then decode the stream data
@@ -446,6 +450,7 @@ class PDFDocument: # the main class for the document
 		self.info = self.get_object(get_reference(d["Info"]), "/Info")
 	
 	def __init__(self, str):
+		str = str.rstrip() # remove any extra newlines from the end of the file
 		self.pdfdoc = str # store the full text, used for byte-offsets
 		self.objects = {}
 		self.xreftable = {}
