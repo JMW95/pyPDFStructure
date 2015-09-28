@@ -97,6 +97,9 @@ def read_dict(str): # parse a dictionary including nested arrays and dicts
 					currkeyname += c # append to the current key name
 				elif len(currkeyname)>0: # reached end of key
 					inkey = False
+					while str[i] in ['\n', '\r', ' ']:
+						i += 1
+					c = str[i]
 					if str[i:i+2]=="<<": # if value is a dict, read recursively
 						(d[currkeyname], offset) = read_dict(str[i:])
 						currkeyname = ""
@@ -119,7 +122,7 @@ def read_dict(str): # parse a dictionary including nested arrays and dicts
 					currvalue += c # most chars are ok
 				else:
 					if currkeyname != "": # if we actually read a key
-						d[currkeyname] = currvalue.strip(" ") # store it
+						d[currkeyname] = currvalue.strip(" \n\r") # store it
 					currkeyname = ""
 					currvalue = ""
 					invalue = False
@@ -231,7 +234,8 @@ class Catalog(PDFObj): # the root of the document, contains pages and structure
 	def __init__(self, doc, d):
 		PDFObj.__init__(self, doc, "Catalog")
 		self.pages = doc.get_object(get_reference(d["Pages"]))
-		self.structtreeroot = doc.get_object(get_reference(d["StructTreeRoot"]))
+		if "StructTreeRoot" in d:
+			self.structtreeroot = doc.get_object(get_reference(d["StructTreeRoot"]))
 
 class Pages(PDFObj): # the 'pages' object, containing a list of all pages
 	def __init__(self, doc, d):
@@ -268,7 +272,7 @@ class ContentStm(PDFObj): # a content stream, with rendering command / text
 		if d["Filter"]=="/FlateDecode": # if the filter is zlib/decompress
 			dec = zlib.decompress(stmdata) # then decode the stream data
 		else:
-			raise Exception("Unknown stream format: " + dict["Filter"])
+			raise Exception("Unknown stream format: " + d["Filter"])
 		self.mcs = {} # keep a dict of all marked content
 		offset = 0
 		while True:
@@ -329,7 +333,7 @@ class ObjStm(PDFObj): # object stream containing compressed PDF objects
 		
 		first_offset = int(di["First"]) # jump to first object position
 		
-		id_offsets = dec[:first_offset].split(" ")
+		id_offsets = dec[:first_offset].replace('\n', " ").replace('\r', "").split(" ") # remove newlines from the id list
 		i = 0
 		while i < len(id_offsets)-1: # last element is garbage
 			id = int(id_offsets[i]) # get the id
@@ -338,7 +342,7 @@ class ObjStm(PDFObj): # object stream containing compressed PDF objects
 			i += 2
 	
 	def load_object(self, id, offset, forcetype=None):
-		end = self.dec.find("\n", offset)
+		end = self.dec.rfind("\n", offset)
 		str = self.dec[offset:end]
 		o = do_load_object(self.doc, str, forcetype) # load the object
 		self.objects[id] = o # store the new object for lookup later
@@ -362,7 +366,10 @@ class PDFInfo: # the information about the PDF document
 			
 class PDFDocument: # the main class for the document
 	def get_structure_tree(self):
-		return self.rootnode.structtreeroot
+		if hasattr(self.rootnode, 'structtreeroot'):
+			return self.rootnode.structtreeroot
+		else:
+			print("PDF file does not contain structure information!")
 	
 	def load_object(self, id, offset, forcetype=None):
 		str = self.pdfdoc[offset:]
@@ -408,10 +415,10 @@ class PDFDocument: # the main class for the document
 		if d["Filter"]=="/FlateDecode": # if the filter is zlib/decompress
 			dec = zlib.decompress(stmdata) # then decode the stream data
 		else:
-			raise Exception("Unknown stream format: " + dict["Filter"])
+			raise Exception("Unknown stream format: " + d["Filter"])
 		first_idx = 0
 		if "Index" in d:
-			first_idx = read_array(d["Index"])[0]
+			first_idx = d["Index"][0]
 		wids = d["W"] # read the field widths from dict
 		wtype = wids[0] # width of type field
 		wloc = wids[1] # width of location field
@@ -433,6 +440,11 @@ class PDFDocument: # the main class for the document
 				self.xrefstm[id] = loc
 			offset += record_width
 			id += 1
+		
+		# get the root object
+		self.rootnode = self.get_object(get_reference(d["Root"]))
+		# get the info object
+		self.info = self.get_object(get_reference(d["Info"]), "/Info")
 	
 	def read_trailer(self, str):
 		(d, dict_end) = read_dict(str) # read the dict
@@ -462,14 +474,19 @@ class PDFDocument: # the main class for the document
 		# read the byte offset of xref-table
 		str_xref = str[end_startxref:end_xref_offset]
 		startxref_offset = int(str_xref.strip(" \n\r"))
-		self.read_xref_table(str[startxref_offset:]) # read the table
+		if str[startxref_offset:startxref_offset+4] == "xref":
+			self.read_xref_table(str[startxref_offset:]) # read the table
+		else:
+			self.read_xref_stm(str[startxref_offset:])
 		
 		# read trailer
-		start_trailer = str.rfind("trailer") # find the trailer
-		start_trailer_dict = str.find("<<", start_trailer) # find trailer dict
-		end_trailer_dict = str.find(">>", start_trailer_dict)+2
-		# process the trailer
-		self.read_trailer(str[start_trailer_dict:end_trailer_dict])
+		end_of_objs = str.rfind("endobj")
+		start_trailer = str.rfind("trailer",end_of_objs) # find the trailer, if it exists
+		if start_trailer >= 0:
+			start_trailer_dict = str.find("<<", start_trailer) # find trailer dict
+			end_trailer_dict = str.find(">>", start_trailer_dict)+2
+			# process the trailer
+			self.read_trailer(str[start_trailer_dict:end_trailer_dict])
 
 
 # TEST STUFF BELOW
