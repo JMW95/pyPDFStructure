@@ -322,9 +322,13 @@ class ObjStm(PDFObj): # object stream containing compressed PDF objects
 		self.xreftable = {}
 		self.objects = {}
 		
-		end_stream_label = str.find("stream")+6 # locate the stream data
-		end_stream = str.rfind("endstream")
-		str = str[end_stream_label:end_stream].strip(" \n\r")
+		startstream = str.find("stream")+6
+		endstream = str.rfind("endstream")
+		# we need to remove the newlines:
+		# if using UNIX newlines, remove 1 char, else remove 2 (Windows newlines)
+		startstream += 2 if str[startstream] == '\r' else 1
+		endstream -= 2 if str[endstream-1] == '\r' else 1
+		str = str[startstream:endstream]
 		if di["Filter"]=="/FlateDecode":
 			dec = zlib.decompress(str) # decompress it
 			self.dec = dec
