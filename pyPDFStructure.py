@@ -182,6 +182,10 @@ def do_load_object(doc, str, forcetype=None):
 			o = Pages(doc, d)
 		elif type=="/Page": # Page object
 			o = Page(doc, d)
+		elif type=="/Font": # Font object
+			o = Font(doc, str, d)
+		elif type=="/CMap": # Character Map object
+			o = CMap(doc, str, d)
 		elif type=="/StructTreeRoot": # Root of Structure Tree
 			o = StructTreeRoot(doc, d)
 		elif type=="/StructElem": # Element of Structure Tree
@@ -200,31 +204,51 @@ def do_load_object(doc, str, forcetype=None):
 	return o
 
 class MarkedContent: # a marked piece of text (linked somewhere in structure)
-	def __init__(self, str):
+	def __init__(self, doc, str):
 		self.text = ""
 		lines = str.split("\n")
+		currfont = None
 		for line in lines:
 			line = line.strip(" \t\n\r")
 			if len(line)<2:
 				continue
+			if line[-2:]=="Tf":
+				currfont = doc.currentpage.fonts[line.split(" ")[0].strip("/")]
 			if line[-2:]=="TJ":
 				escape = False
 				inbracket = False
+				inunicode = False
+				unicodetmp = ""
 				for ch in line[:-2].strip(" []"):
 					if escape:
 						self.text += ch
 						escape = False
 					else:
-						if ch=="(":
-							inbracket = True
-						elif ch==")":
-							inbracket = False
-						elif ch=="\\":
+						if not inunicode:
+							if ch=="(":
+								inbracket = True
+								continue
+							elif ch==")":
+								inbracket = False
+								continue
+						if not inbracket:
+							if ch=="<":
+								inunicode = True
+								continue
+							elif ch==">":
+								inunicode = False
+								continue
+						if ch=="\\":
 							escape=True
 						else:
 							if inbracket:
 								self.text += ch
-
+							elif inunicode:
+								unicodetmp += ch
+							if len(unicodetmp)==4:
+								self.text += unichr(currfont.tounicode.map_char(int(unicodetmp, 16)))
+								unicodetmp = ""
+								
 class PDFObj: # parent class for all PDF objects
 	def __init__(self, doc, type):
 		self.doc = doc
@@ -248,8 +272,69 @@ class Pages(PDFObj): # the 'pages' object, containing a list of all pages
 class Page(PDFObj): # a single page, contains the content stream with text etc.
 	def __init__(self, doc, d):
 		PDFObj.__init__(self, doc, "Page")
+		fontrefs = d["Resources"]["Font"]
+		self.fonts = {}
+		for k in fontrefs:
+			self.fonts[k] = doc.get_object(get_reference(fontrefs[k]))
+		doc.currentpage = self # store the current page so font lookups can be made
 		self.contents = doc.get_object(
 			get_reference(d["Contents"]), "/ContentStm" )
+
+class Font(PDFObj): # a font object
+	def __init__(self, doc, str, d):
+		PDFObj.__init__(self, doc, "Font")
+		try:
+			self.tounicode = doc.get_object(get_reference(d["ToUnicode"]), "/CMap")
+		except KeyError:
+			pass
+
+class CMap(PDFObj): # a character map object
+	def read_charcode(self, line, start):
+		start = line.find("<", start)+1
+		end = line.find(">", start)
+		return int(line[start:end], 16), end
+	
+	def map_char(self, charcode):
+		for mapping in self.mappings:
+			if mapping[0] <= charcode and mapping[1] >= charcode:
+				return mapping[2] + (charcode - mapping[0])
+	
+	def __init__(self, doc, str, d):
+		PDFObj.__init__(self, doc, "CMap")
+		startstream = str.find("stream")+6
+		endstream = str.rfind("endstream")
+		# we need to remove the newlines:
+		# if using UNIX newlines, remove 1 char, else remove 2 (Windows newlines)
+		startstream += 2 if str[startstream] == '\r' else 1
+		endstream -= 2 if str[endstream-1] == '\r' else 1
+		stmdata = str[startstream:endstream]
+		if d["Filter"]=="/FlateDecode": # if the filter is zlib/decompress
+			dec = zlib.decompress(stmdata) # then decode the stream data
+		else:
+			raise Exception("Unknown stream format: " + d["Filter"])
+		self.mappings = []
+		reading_char = False
+		reading_range = False
+		for line in dec.split("\n"):
+			line = line.strip(" \r\n")
+			if line[-11:] == "beginbfchar":
+				reading_char = True
+			elif line[-9:] == "endbfchar":
+				reading_char = False
+			elif line[-12:] == "beginbfrange":
+				reading_range = True
+			elif line[-10:] == "endbfrange":
+				reading_range = False
+			else:
+				if reading_char:
+					src, adv = self.read_charcode(line, 0)
+					dst, _ = self.read_charcode(line, adv)
+					self.mappings.append([src, src, dst])
+				elif reading_range:
+					base, e1 = self.read_charcode(line, 0)
+					end, e2 = self.read_charcode(line, e1)
+					dst, _ = self.read_charcode(line, e2)
+					self.mappings.append([base, end, dst])
 
 class ContentStm(PDFObj): # a content stream, with rendering command / text
 	def get_mc(self, id):
@@ -286,7 +371,7 @@ class ContentStm(PDFObj): # a content stream, with rendering command / text
 			(d, _) = read_dict(dec[start:end_of_dict+2]) # read the MC dict
 			id = int(d["MCID"]) # get the id
 			
-			self.mcs[id] = MarkedContent(dec[start:end]) # store in our dict
+			self.mcs[id] = MarkedContent(doc, dec[start:end]) # store in our dict
 			offset = end # skip to the end of this MC
 
 class StructTreeRoot(PDFObj): # the root of the structure tree
@@ -520,4 +605,4 @@ class PDFDocument: # the main class for the document
 #			fout.write(indent + "--" + "<<UNKNOWN>>" + "\n")
 
 #dfs(fout, doc.get_structure_tree())
-#fout.close()
+#fout.close()
