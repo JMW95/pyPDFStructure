@@ -248,7 +248,7 @@ class MarkedContent: # a marked piece of text (linked somewhere in structure)
 							if len(unicodetmp)==4:
 								self.text += unichr(currfont.tounicode.map_char(int(unicodetmp, 16)))
 								unicodetmp = ""
-								
+
 class PDFObj: # parent class for all PDF objects
 	def __init__(self, doc, type):
 		self.doc = doc
@@ -499,8 +499,11 @@ class PDFDocument: # the main class for the document
 		start = str.find("stream")+6 # find the position of the stream data
 		(d, dict_end) = read_dict(str[:start]) # read dict
 		end = str.find("endstream")
-		stmdata = str[start:end].strip(" \n\r") # cut it out
-		
+		# we need to remove the newlines:
+		# if using UNIX newlines, remove 1 char, else remove 2 (Windows newlines)
+		start += 2 if str[start] == '\r' else 1
+		end -= 2 if str[end-1] == '\r' else 1
+		stmdata = str[start:end]
 		if d["Filter"]=="/FlateDecode": # if the filter is zlib/decompress
 			dec = zlib.decompress(stmdata) # then decode the stream data
 		else:
@@ -605,4 +608,4 @@ class PDFDocument: # the main class for the document
 #			fout.write(indent + "--" + "<<UNKNOWN>>" + "\n")
 
 #dfs(fout, doc.get_structure_tree())
-#fout.close()
+#fout.close()
